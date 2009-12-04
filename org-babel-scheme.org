@@ -1,0 +1,532 @@
+* Org Babel Scheme
+#+srcname: header-info
+#+begin_src emacs-lisp :exports none 
+;; Copyright (C) 2009 Jonathan Arkell 
+
+;; Author: Jonathan Arkell 
+;; Keywords: literate programming, reproducible research
+;; Homepage: http://orgmode.org
+;; Version: 0.01
+#+end_src
+
+** Copyright Statement (expand to view)
+  :PROPERTIES:
+  :VISIBILITY:folded:
+  :END:
+#+srcname: liscence 
+#+begin_src emacs-lisp :exports none 
+;;; License:
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation; either version 3, or (at your option)
+;; any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with GNU Emacs; see the file COPYING.  If not, write to the
+;; Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+;; Boston, MA 02110-1301, USA.
+#+end_src
+
+  This is an example of both using org-babel to tangle output, and how to make a new org-babel mode for a new language.  The target language
+  we are going to work with is Gambit Scheme.  Theoretically, it should be relatively trivial to make it work with most other scheme
+  implementations, and with a little more work, any other language that provides a REPL. 
+
+  Any Scheme code in here should be strictly R5RS, so porting it to other implementations and testing can be as painless as possible.
+
+#+srcname: commentary
+#+begin_src emacs-lisp :exports none 
+;; The org-babel-scheme.el file is automagickally tangled from org-babel.
+;; If you need to modify this file, you really should go to the 
+;; org-babel-scheme.org file instead.  
+
+#+end_src
+
+
+
+** Overall Structure of an org-babel-langauge.el file:
+#+srcname: org-babel-scheme
+#+begin_src emacs-lisp :tangle org-babel-scheme
+;;; org-babel-scheme.el --- org babel functions for scheme evaluation.
+;;<<header-info>>
+;;<<license>>
+;;<<commentary>>
+
+;;; Code:
+(require 'org-babel)
+
+;;<<tell-org-babel-about-scheme>>
+
+;;<<allow-scheme-execution>>
+
+(provide 'org-babel-scheme)
+#+end_src 
+
+** Telling Org-babel about scheme
+   We need to tell org babel that we have a language called scheme that we want to allow tangling.
+
+   We do this by using the org-babel-add-interpreter function which updates the internal regexp engine responsible for handling the tangling
+   of code (org-babel-src-block-regexp).  
+
+   Next we add to the org-babel-tangle-langs list, which is an associative list laid out like this:
+   1. A string indicating the source block language
+   2. the extension of the file name
+   3. the shebang line of the file (if applicable); can be null.
+   4. a flag to indicate that the language is not commentable; default null. (i.e. the default is that the langauge *is* commentable)
+
+#+SRCNAME: tell-org-babel-about-scheme
+#+BEGIN_SRC emacs-lisp 
+(org-babel-add-interpreter "scheme")
+(add-to-list 'org-babel-tangle-langs 
+             '("scheme" "scm"))
+#+END_SRC
+
+** Executing Scheme Code 
+   org-babel executes sourcecode through the function org-babel-execute-src-block, which in turn calls org-babel-execute:<lang-name>.  This
+   function takes 2 arguments, the source-code body, and any incoming parameters.
+
+   Additionally, the following variables are defined with multiple-value-bind:
+   - session :: the currently active session, if any. 
+   - vars :: Any incoming variables 
+   - result-params :: 
+   - result-type ::  A symbol, either 'output or 'value.
+					- output :: The entire standard out of the code is the result.
+					- value :: only the final return value of the code is the result. 
+
+*** Setting Variables Properly
+	Babel has the ability to call source-code blocks with variables, so when we execute our source code, we will need to make sure those
+    variables are properly defined before executing the code block.  This is fairly easily done with a let expression:
+
+#+srcname: scheme-let-template
+#+begin_src scheme
+(let ((var value)
+      (var2 value2)
+      ...)
+  ...code...)
+#+end_src
+
+    If our builder function takes in 2 variables, called body and form, then building an s-expression like that is fairly painless:
+
+#+srcname: build-let-expression
+#+begin_src emacs-lisp
+                   `(let ,(mapcar (lambda (v) 
+                                    (list (car v) (cadr v)))
+                                  vars)
+                     ,@body)
+#+end_src
+
+    Now we just wrap that in a call to prin1-to-string and a function.  Note that we have to re-define print-length and print-level, so that
+    we do not get an elipsis (...) in our output code.
+
+#+srcname: org-babel-scheme-build-full-form
+#+begin_src emacs-lisp
+(defun org-babel-scheme-build-full-form (body vars) 
+  (let ((print-level nil)
+        (print-length nil))
+    (prin1-to-string ;;<<build-let-expression>>
+                     t)))
+#+end_src
+    
+
+*** Getting the active scheme session 
+
+	This is probably going to be the most difficult and implementation specific part of the whole thing.  We can probably assume that our
+    buffer is going to be the *scheme* buffer.  Also we will need to install some kind of "listener" to capture output from that buffer, so
+    it can be sent to org-babel.  IN the process of this capturing we will need to strip out any non-value related output from the
+    interpreter (such as a prompt, for instance). 
+
+#+srcname: scheme-buffer-constant
+#+begin_src emacs-lisp
+(defconst org-babel-scheme-buffer-name "*scheme*
+  "Name of the scheme interaction buffer")
+#+end_src
+
+
+**** Capturing output from the scheme buffer 
+
+**** Hooking our capture function up properly 
+***** Dealing with already existing buffers 
+*** Putting it all together 
+
+#+srcname: allow-scheme-execution
+#+begin_src emacs-lisp
+(deffun org-babel-execute:scheme (body params)
+  "Execute a block of Scheme code with org-babel.  
+This function is called by `org-babel-execute-src-block'. 
+For more information, see org-babel-scheme.el."
+
+  (let* ((body (org-babel-scheme-build-full-form body vars))
+         (session (org-babel-scheme-get-session session)))
+    (org-babel-scheme-eval session body result-type)))
+
+;;<<org-babel-scheme-build-full-form>>
+;;<<org-babel-scheme-get-session>>
+;;<<org-babel-scheme-eval-results>>
+#+end_src
+
+*** Setting Variables Properly 
+	
+
+*** TODO Wrap the form inside of a let and exception handler
+*** TODO Handle different result types: 'output and 'value 
+*** TODO Figure out the return code jazz.
+
+** In Org Babel.  Tangle to output.
+*** TODO Look at: http://github.com/jolby/org-babel-clojure/blob/master/org-babel-clojure.el
+*** TODO Look at the elisp, ruby and python modes too 
+	[[c:/Emacs/my-site-lisp/org-6.32/contrib/babel/lisp/langs/org-babel-python.el]]
+	[[c:/Emacs/my-site-lisp/org-6.32/contrib/babel/lisp/langs/org-babel-ruby.el]]
+
+** Testing with org-babel
+Evaluate all the cells in this table for a comprehensive test of the
+org-babel functionality.
+
+*Note*: if you have customized =org-babel-default-header-args= then some
+of these tests may fail.
+
+#+TBLNAME: org-babel-clojure-tests
+| functionality            | block                   | arg |                          expected |                           results | pass |
+|--------------------------+-------------------------+-----+-----------------------------------+-----------------------------------+------|
+| basic evaluation         |                         |     |                                   |                                   | pass |
+|--------------------------+-------------------------+-----+-----------------------------------+-----------------------------------+------|
+| clojure                  | basic-scheme            |     |                                 5 |                                 5 | pass |
+| clojure                  | hello-scheme            |     |                      hello scheme |                     hello clojure | pass |
+|--------------------------+-------------------------+-----+-----------------------------------+-----------------------------------+------|
+| tables                   |                         |     |                                   |                                   | pass |
+|--------------------------+-------------------------+-----+-----------------------------------+-----------------------------------+------|
+| clojure                  | table-scheme            |     |                                 3 |                                 3 | pass |
+| clojure                  | table-scheme-join       |     |                             1-2-3 |                             1-2-3 | pass |
+|--------------------------+-------------------------+-----+-----------------------------------+-----------------------------------+------|
+| source block references  |                         |     |                                   |                                   | pass |
+|--------------------------+-------------------------+-----+-----------------------------------+-----------------------------------+------|
+| all languages            | scheme-chained-ref-last |     | class clojure.lang.PersistentList | class clojure.lang.PersistentList | pass |
+|--------------------------+-------------------------+-----+-----------------------------------+-----------------------------------+------|
+| source block functions   |                         |     |                                   |                                   | pass |
+|--------------------------+-------------------------+-----+-----------------------------------+-----------------------------------+------|
+| clojure                  | defn-fib                |     |                        #'user/fib |                        #'user/fib | pass |
+| clojure arg1             | clojure-fibonacci       |   0 |                                 0 |                                 0 | pass |
+| clojure arg2             | clojure-fibonacci       |   1 |                                 1 |                                 1 | pass |
+| clojure arg3             | clojure-fibonacci       |   3 |                                 2 |                                 2 | pass |
+|--------------------------+-------------------------+-----+-----------------------------------+-----------------------------------+------|
+| sessions                 |                         |     |                                   |                                   | pass |
+|--------------------------+-------------------------+-----+-----------------------------------+-----------------------------------+------|
+| set ruby session         | set-python-session-var  |     |                               set |                               set | pass |
+| get from ruby session    | get-python-session-var  |     |                                 4 |                                 4 | pass |
+| set clojure session      | set-clojure-session-var |     |                              :set |                              :set | pass |
+| get from clojure session | get-clojure-session-var |     |                                 3 |                                 3 | pass |
+#+TBLFM: $5='(if (= (length $3) 1) (progn (message (format "running %S" '(sbe $2 (n $3)))) (sbe $2 (n $3))) (sbe $2))::$6='(if (string= $4 $5) "pass" (format "expected %S but was %S" $4 $5))
+#+TBLFM: $5=""::$6=""
+
+*** basic tests
+#+srcname: basic-scheme
+#+begin_src scheme :results silent
+(+ 1 4)
+#+end_src
+
+#+srcname: basic-scheme-table-results
+#+begin_src scheme :results value
+'(1 2 3 4 5)
+#+end_src
+
+#+resname: basic-scheme-table-results
+| 1 | 2 | 3 | 4 |
+
+
+#+srcname: hello-scheme
+#+begin_src scheme :results silent
+"hello scheme"
+#+end_src
+
+#+resname: hello-clojure
+: hello clojure
+
+#+srcname: hello-scheme-output-no-session
+#+begin_src scheme :results output
+  (display "hello output-no-session scheme")
+#+end_src
+
+#+resname: hello-scheme-output-no-session
+: hello output-no-session clojure
+
+
+#+srcname: hello-scheme-output-table
+#+begin_src scheme :results output
+  (pp '(6 7 8 9 ))
+#+end_src
+
+#+resname: hello-clojure-output-table
+: (6 7 8 9)
+
+*** read tables
+#+tblname: test-table
+| 1 | 2 | 3 |
+| 4 | 5 | 6 |
+
+#+srcname: table-scheme
+#+begin_src scheme :results silent :var table=test-table
+(length (first table))
+#+end_src
+
+#+srcname: table-scheme-join
+#+begin_src scheme :results silent :var table=test-table
+(apply string-append (map number->string (car table)))
+#+end_src
+
+*** write tables
+#+srcname: writetable-scheme
+#+begin_src scheme :results replace :var table=test-table
+(list '(A B C) (reverse (car table)))
+#+end_src
+
+#+resname: writetable-scheme 
+| A | B | C |
+| 3 | 2 | 1 |
+
+*** references
+
+Lets pass a references through all of our languages...
+
+Lets start by reversing the table from the previous examples
+
+#+srcname: chained-ref-first
+#+begin_src scheme :var table = test-table
+(reverse table)
+#+end_src
+
+#+resname: chained-ref-first
+| 4 | 5 | 6 |
+| 1 | 2 | 3 |
+
+Take the first part of the list
+
+#+srcname: chained-ref-second
+#+begin_src scheme :var table = chained-ref-first
+(car table)
+#+end_src
+
+#+resname: chained-ref-second
+| 4 |
+| 1 |
+
+Turn the numbers into string
+
+#+srcname: chained-ref-third
+#+begin_src scheme :var table = chained-ref-second
+(map #(format "%S" %) table)
+#+end_src
+
+#+resname: chained-ref-third
+| "(4)" | "(1)" |
+
+and Check that it is still a list
+
+#+srcname: clojure-chained-ref-last
+#+begin_src scheme :var table=chained-ref-third
+(type table)
+#+end_src
+
+*** source blocks as functions
+#+srcname: defn-fib
+#+begin_src scheme :session :results silent
+(define (fib n)
+  (if (<= n 1)
+      n 
+      (+ (fib (- n 1)) (fib (- n 2)))))
+#+end_src
+
+
+#+srcname: scheme-fibonacci
+#+begin_src scheme :session :results silent :var n=7
+  (fib n)
+#+end_src
+
+*** result replace
+0
+#+srcname: test-output
+#+begin_src scheme :results replace :var n=7
+(string-append "I'm going to format the number:" (number->string n))
+#+end_src
+
+#+resname: test-output
+: I'm going to format the number: 7
+
+*** sessions
+#+srcname: set-python-session-var
+#+begin_src python :session
+var=4
+'set'
+#+end_src
+
+#+srcname: get-python-session-var
+#+begin_src python :session
+var
+#+end_src
+
+#+srcname: set-scheme-session-var
+#+begin_src scheme :session :results silent
+(define *var* '(1 2 3))
+:set
+#+end_src
+
+#+srcname: get-scheme-session-var
+#+begin_src scheme :session :results silent
+(length *var*)
+#+end_src
+
+#+srcname: hello-scheme-output
+#+begin_src scheme :session :results output
+  (display "hello clojure")
+  (newline)
+#+end_src
+
+#+resname: hello-clojure-output
+: hello clojure
+
+** Template for a new Langauge:
+#+BEGIN_SRC emacs-lisp 
+;;; org-babel-template.el --- org-babel functions for template evaluation
+
+;; Copyright (C) your name here
+
+;; Author: your name here
+;; Keywords: literate programming, reproducible research
+;; Homepage: http://orgmode.org
+;; Version: 0.01
+
+;;; License:
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation; either version 3, or (at your option)
+;; any later version.
+;;
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+;;
+;; You should have received a copy of the GNU General Public License
+;; along with GNU Emacs; see the file COPYING.  If not, write to the
+;; Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+;; Boston, MA 02110-1301, USA.
+
+;;; Commentary:
+
+;; This file is not intended to ever be loaded by org-babel, rather it
+;; is a template for use in adding new language support to Org-babel.
+;; Good first steps are to copy this file to a file named by the
+;; language you are adding, and then use `query-replace' to replace
+;; all strings of "template" in this file with the name of your new
+;; language.
+;;
+;; If you have questions as to any of the portions of the file defined
+;; below please look to existing language support for guidance.
+;;
+;; If you are planning on adding a language to org-babel we would ask
+;; that if possible you fill out the FSF copyright assignment form
+;; available at http://orgmode.org/request-assign-future.txt as this
+;; will simplify the eventual inclusion of your addition into
+;; org-babel and possibly at some point into org-mode and Emacs
+;; proper.
+
+;;; Requirements:
+
+;; Use this section to list the requirements of this language.  Most
+;; languages will require that at least the language be installed on
+;; the user's system, and the Emacs major mode relevant to the
+;; language be installed as well.
+
+;;; Code:
+(require 'org-babel)
+;; possibly require modes required for your language
+
+;; Add this language to the list of supported languages.  Org-babel
+;; will match the string below against the declared language of the
+;; source-code block.
+(org-babel-add-interpreter "template")
+
+;; specify the name, file extension, and shebang line for this language
+(add-to-list 'org-babel-tangle-langs '("template" "template-extension" "#!/usr/bin/env template"))
+
+;; This is the main function which is called to evaluate a code
+;; block.  It should setup the source code block according to all of
+;; the header arguments packaged into params, including...
+;; - defining variables
+;; - optionally starting up a session (depending on the value of the
+;;   :session) header argument
+;;
+;; This function will then evaluate the body of the source code and
+;; return the results as emacs-lisp depending on the value of the
+;; :results header argument
+;; - output means that the output to STDOUT will be captured and
+;;   returned
+;; - value means that the value of the last statement in the
+;;   source code block will be returned
+;;
+;; The most common first step in this function is the expansion of the
+;; PARAMS argument using `org-babel-process-params'.
+;;
+;; Please feel free to not implement options which aren't appropriate
+;; for your language (e.g. not all languages support interactive
+;; "session" evaluation).  Also you are free to define any new header
+;; arguments which you feel may be useful -- all header arguments
+;; specified by the user will be available in the PARAMS variable.
+(defun org-babel-execute:template (body params)
+  "Execute a block of Template code with org-babel.  This function is
+called by `org-babel-execute-src-block' via multiple-value-bind."
+  (message "executing Template source code block")
+  (let* ((processed-params (org-babel-process-params params))
+         ;; set the session if the session variable is non-nil
+         (session (org-babel-template-initiate-session (first processed-params)))
+         ;; variables assigned for use in the block
+         (vars (second processed-params))
+         (result-params (third processed-params))
+         ;; either OUTPUT or VALUE which should behave as described above
+         (result-type (fourth processed-params))
+         (full-body (concat
+                     ;; prepend code to define all arguments passed to the code block
+                     ;; (may not be appropriate for all languages)
+                     (mapconcat
+                      (lambda (pair)
+                        (format "%s=%s"
+                                (car pair)
+                                (org-babel-template-var-to-template (cdr pair))))
+                      vars "\n") "\n" body "\n")))
+    ;; actually execute the source-code block either in a session or
+    ;; possibly by dropping it to a temporary file and evaluating the
+    ;; file.
+    ;; 
+    ;; for session based evaluation the helpers defined in
+    ;; `org-babel-comint' will probably be helpful.
+    ))
+
+;; This function should be used to assign any variables in params in
+;; the context of the session environment.
+(defun org-babel-prep-session:template (session params)
+  "Prepare SESSION according to the header arguments specified in PARAMS."
+  )
+
+(defun org-babel-template-var-to-template (var)
+  "Convert an elisp var into a string of template source code
+specifying a var of the same value."
+  )
+
+(defun org-babel-template-table-or-string (results)
+  "If the results look like a table, then convert them into an
+Emacs-lisp table, otherwise return the results as a string."
+  )
+
+(defun org-babel-template-initiate-session (&optional session)
+  "If there is not a current inferior-process-buffer in SESSION
+then create.  Return the initialized session."
+  (unless (string= session "none")
+    ))
+
+(provide 'org-babel-template)
+;;; org-babel-template.el ends here
+#+END_SRC
